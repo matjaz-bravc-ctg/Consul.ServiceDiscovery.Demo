@@ -1,46 +1,26 @@
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using Ocelot.Cache.CacheManager;
 using Ocelot.DependencyInjection;
-using Ocelot.Middleware;
 using Ocelot.Discovery.Consul;
+using Ocelot.Middleware;
 using Ocelot.QualityOfService.Polly;
 using Services.Gateway.Services;
-using System.IO;
 
-IHostBuilder hostBuilder = Host.CreateDefaultBuilder(args)
-  .UseContentRoot(Directory.GetCurrentDirectory())
-  .ConfigureWebHostDefaults(webBuilder =>
-  {
-    webBuilder.ConfigureServices(services =>
-      services
-        .AddOcelot()
-        .AddConsul<MyConsulServiceBuilder>()
-        .AddCacheManager(x =>
-        {
-          x.WithDictionaryHandle();
-        })
-        .AddPolly());
-    webBuilder.Configure(app =>
-      app.UseOcelot().Wait())
-    .ConfigureAppConfiguration((hostingContext, config) =>
-    {
-      config
-        .SetBasePath(hostingContext.HostingEnvironment.ContentRootPath)
-        .AddJsonFile("appsettings.json", false, true)
-        .AddJsonFile($"appsettings.{hostingContext.HostingEnvironment.EnvironmentName}.json", true, true)
-        .AddJsonFile("ocelot.json", false, true)
-        .AddEnvironmentVariables();
-    })
-    .ConfigureLogging((builderContext, logging) =>
-    {
-      logging.ClearProviders();
-      logging.AddConsole();
-      logging.AddDebug();
-    });
-  });
+WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
-IHost host = hostBuilder.Build();
-await host.RunAsync();
+builder.Configuration.AddJsonFile("ocelot.json", optional: false, reloadOnChange: true);
+
+builder.Logging
+  .ClearProviders()
+  .AddConsole()
+  .AddDebug();
+
+builder.Services
+  .AddOcelot(builder.Configuration)
+  .AddConsul<MyConsulServiceBuilder>()
+  .AddCacheManager(x => x.WithDictionaryHandle())
+  .AddPolly();
+
+WebApplication app = builder.Build();
+
+await app.UseOcelot();
+await app.RunAsync();

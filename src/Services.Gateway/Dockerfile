@@ -11,6 +11,7 @@ EXPOSE 8080
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
+COPY ["Directory.Build.props", "Directory.Packages.props", "./"]
 COPY ["src/Services.Gateway/Services.Gateway.csproj", "src/Services.Gateway/"]
 RUN dotnet restore "./src/Services.Gateway/Services.Gateway.csproj"
 COPY . .

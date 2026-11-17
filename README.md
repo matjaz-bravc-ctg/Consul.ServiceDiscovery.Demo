@@ -57,85 +57,247 @@ In a first step a service instance registers itself to the service discovery ser
 
 ## Implementation
 
-Let’s look at how we can implement self-registration in the .NET application. First, we need to read the configuration required for service discovery from environment variables, that were passed through the **docker-compose.override.yml** file.
+Let’s look at how we can implement self-registration in the .NET application. First, we need the configuration required for service discovery. It is bound from the **ServiceConfig** configuration section (in Docker it comes from environment variables passed through the **docker-compose.override.yml** file) and validated with data annotations when the service starts, so a misconfigured service fails fast instead of silently using defaults.
 
 ```csharp
-public static class ServiceConfigExtensions
+using System.ComponentModel.DataAnnotations;
+
+namespace Services.Core.ServiceDiscovery;
+
+/// <summary>
+/// Settings used to register this service instance in Consul.
+/// Bound from the <see cref="SectionName"/> configuration section and validated at startup.
+/// </summary>
+public sealed record ServiceConfig
 {
-  public static ServiceConfig GetServiceConfig(this IConfiguration configuration)
+  /// <summary>
+  /// Name of the configuration section the settings are bound from.
+  /// </summary>
+  public const string SectionName = "ServiceConfig";
+
+  /// <summary>
+  /// Unique ID of this service instance in Consul.
+  /// </summary>
+  [Required]
+  public string Id { get; init; } = string.Empty;
+
+  /// <summary>
+  /// Logical service name; instances with the same name are load balanced by the gateway.
+  /// </summary>
+  [Required]
+  public string Name { get; init; } = string.Empty;
+
+  /// <summary>
+  /// Host name or IP address under which Consul and the gateway reach this instance.
+  /// </summary>
+  [Required]
+  public string ApiUrl { get; init; } = string.Empty;
+
+  /// <summary>
+  /// Port under which Consul and the gateway reach this instance.
+  /// </summary>
+  [Range(1, 65535)]
+  public int Port { get; init; }
+
+  /// <summary>
+  /// Address of the Consul agent HTTP API.
+  /// </summary>
+  [Required]
+  public Uri ConsulUrl { get; init; } = null!;
+
+  /// <summary>
+  /// Path of the health endpoint Consul calls to check this instance.
+  /// </summary>
+  [Required]
+  public string HealthCheckEndPoint { get; init; } = "/health";
+}
+```
+The configuration, the Consul client and the registration service are added to the dependency injection container with a single extension method:
+
+```csharp
+using Consul;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
+
+namespace Services.Core.ServiceDiscovery;
+
+/// <summary>
+/// Registers Consul service discovery in the dependency injection container.
+/// </summary>
+public static class ServiceDiscoveryExtensions
+{
+  /// <summary>
+  /// Binds and validates <see cref="ServiceConfig"/>, registers the Consul client and
+  /// the hosted service that keeps this instance registered in Consul.
+  /// </summary>
+  public static IServiceCollection AddConsulServiceDiscovery(this IServiceCollection services)
   {
-    ArgumentNullException.ThrowIfNull(configuration);
+    ArgumentNullException.ThrowIfNull(services);
 
-    ServiceConfig serviceConfig = new()
+    services
+      .AddOptions<ServiceConfig>()
+      .BindConfiguration(ServiceConfig.SectionName)
+      .ValidateDataAnnotations()
+      .ValidateOnStart();
+
+    services.AddSingleton<IConsulClient>(provider =>
     {
-      Id = configuration.GetValue<string>("ServiceConfig:Id"),
-      Name = configuration.GetValue<string>("ServiceConfig:Name"),
-      ApiUrl = configuration.GetValue<string>("ServiceConfig:ApiUrl"),
-      Port = configuration.GetValue<int>("ServiceConfig:Port"),
-      ConsulUrl = configuration.GetValue<Uri>("ServiceConfig:ConsulUrl"),
-      HealthCheckEndPoint = configuration.GetValue<string>("ServiceConfig:HealthCheckEndPoint"),
-    };
+      ServiceConfig serviceConfig = provider.GetRequiredService<IOptions<ServiceConfig>>().Value;
+      return new ConsulClient(config => config.Address = serviceConfig.ConsulUrl);
+    });
 
-    return serviceConfig;
+    services.AddHostedService<ServiceDiscoveryHostedService>();
+
+    return services;
   }
 }
 ```
-After reading the configuration required to reach service discovery service, we can use it to register our service. The code below is implemented as a **background task** (hosted service), that **registers** the service in **Consul** by overriding previous information about service if such existed. If the service is shutting down, it is **automatically unregistered** from the Consul registry.
+In **Program.cs** of the service we call `builder.Services.AddConsulServiceDiscovery()` and expose the health endpoint Consul calls with `app.MapHealthChecks(...)`.
+
+The code below is implemented as a **background service** that **registers** the service in **Consul**. If Consul is not reachable yet (for example when the service starts before the Consul agent is ready), registration is retried with exponential backoff. The registration is also checked periodically, so the service **registers again** if Consul loses it (for example after a restart of a Consul agent running in dev mode). If the service is shutting down, it is **automatically unregistered** from the Consul registry.
 
 ```csharp
-public class ServiceDiscoveryHostedService(
+using Consul;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+
+namespace Services.Core.ServiceDiscovery;
+
+/// <summary>
+/// Keeps the service registered in the Consul registry and deregisters it on shutdown.
+/// Registration is retried with exponential backoff until Consul becomes reachable, and the
+/// registration is checked periodically so the service registers again when Consul loses it
+/// (for example after a restart of a Consul agent running in dev mode).
+/// </summary>
+public sealed class ServiceDiscoveryHostedService(
   ILogger<ServiceDiscoveryHostedService> logger,
   IConsulClient client,
-  ServiceConfig config)
-  : IHostedService
+  IOptions<ServiceConfig> options)
+  : BackgroundService
 {
-  private AgentServiceRegistration _serviceRegistration;
+  private static readonly TimeSpan _initialRetryDelay = TimeSpan.FromSeconds(1);
+  private static readonly TimeSpan _maxRetryDelay = TimeSpan.FromSeconds(30);
+  private static readonly TimeSpan _registrationCheckInterval = TimeSpan.FromSeconds(30);
+
+  private readonly AgentServiceRegistration _serviceRegistration = CreateRegistration(options.Value);
+
+  private volatile bool _isRegistered;
 
   /// <summary>
-  /// Registers service to Consul registry
+  /// Registers the service to the Consul registry and re-registers it whenever the registration is lost.
   /// </summary>
-  public async Task StartAsync(CancellationToken cancellationToken)
+  protected override async Task ExecuteAsync(CancellationToken stoppingToken)
   {
-    _serviceRegistration = new AgentServiceRegistration
-    {
-      ID = config.Id,
-      Name = config.Name,
-      Address = config.ApiUrl,
-      Port = config.Port,
-      Check = new AgentServiceCheck()
-      {
-        DeregisterCriticalServiceAfter = TimeSpan.FromSeconds(5),
-        Interval = TimeSpan.FromSeconds(15),
-        HTTP = $"http://{config.ApiUrl}:{config.Port}/api/values/{config.HealthCheckEndPoint}",
-        Timeout = TimeSpan.FromSeconds(5)
-      }
-    };
+    TimeSpan retryDelay = _initialRetryDelay;
+    int failedAttempts = 0;
 
-    try
+    while (!stoppingToken.IsCancellationRequested)
     {
-      await client.Agent.ServiceDeregister(_serviceRegistration.ID, cancellationToken).ConfigureAwait(false);
-      await client.Agent.ServiceRegister(_serviceRegistration, cancellationToken).ConfigureAwait(false);
-    }
-    catch (Exception ex)
-    {
-      logger.LogError(ex, $"Error while trying to deregister in {nameof(StartAsync)}");
+      TimeSpan nextCheck;
+
+      try
+      {
+        await EnsureRegisteredAsync(failedAttempts + 1, stoppingToken).ConfigureAwait(false);
+
+        failedAttempts = 0;
+        retryDelay = _initialRetryDelay;
+        nextCheck = _registrationCheckInterval;
+      }
+      catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+      {
+        return;
+      }
+      catch (Exception ex)
+      {
+        failedAttempts++;
+
+        logger.LogWarning(
+          "Consul registration attempt {Attempt} for service {ServiceId} failed: {Error}. Retrying in {Delay}s",
+          failedAttempts,
+          _serviceRegistration.ID,
+          ex.Message,
+          retryDelay.TotalSeconds);
+
+        nextCheck = retryDelay;
+        retryDelay = TimeSpan.FromTicks(Math.Min(retryDelay.Ticks * 2, _maxRetryDelay.Ticks));
+      }
+
+      try
+      {
+        await Task.Delay(nextCheck, stoppingToken).ConfigureAwait(false);
+      }
+      catch (OperationCanceledException)
+      {
+        return;
+      }
     }
   }
 
   /// <summary>
   /// If the service is shutting down it deregisters service from Consul registry
   /// </summary>
-  public async Task StopAsync(CancellationToken cancellationToken)
+  public override async Task StopAsync(CancellationToken cancellationToken)
   {
+    await base.StopAsync(cancellationToken).ConfigureAwait(false);
+
+    if (!_isRegistered)
+    {
+      return;
+    }
+
     try
     {
       await client.Agent.ServiceDeregister(_serviceRegistration.ID, cancellationToken).ConfigureAwait(false);
     }
     catch (Exception ex)
     {
-      logger.LogError(ex, $"Error while trying to deregister in {nameof(StopAsync)}");
+      logger.LogError(ex, "Error while trying to deregister service {ServiceId}", _serviceRegistration.ID);
     }
   }
+
+  private async Task EnsureRegisteredAsync(int attempt, CancellationToken cancellationToken)
+  {
+    if (_isRegistered)
+    {
+      QueryResult<Dictionary<string, AgentService>> services =
+        await client.Agent.Services(cancellationToken).ConfigureAwait(false);
+
+      if (services.Response.ContainsKey(_serviceRegistration.ID))
+      {
+        return;
+      }
+
+      logger.LogWarning(
+        "Service {ServiceId} is no longer registered in Consul, registering it again",
+        _serviceRegistration.ID);
+    }
+
+    // ServiceRegister replaces an existing registration with the same ID, so no deregistration is needed first.
+    await client.Agent.ServiceRegister(_serviceRegistration, cancellationToken).ConfigureAwait(false);
+    _isRegistered = true;
+
+    logger.LogInformation(
+      "Service {ServiceId} registered in Consul after {Attempt} attempt(s)",
+      _serviceRegistration.ID,
+      attempt);
+  }
+
+  private static AgentServiceRegistration CreateRegistration(ServiceConfig config) => new()
+  {
+    ID = config.Id,
+    Name = config.Name,
+    Address = config.ApiUrl,
+    Port = config.Port,
+    Check = new AgentServiceCheck
+    {
+      // Consul enforces a minimum of one minute for automatic deregistration of critical services.
+      DeregisterCriticalServiceAfter = TimeSpan.FromMinutes(1),
+      Interval = TimeSpan.FromSeconds(15),
+      HTTP = new UriBuilder(Uri.UriSchemeHttp, config.ApiUrl, config.Port, config.HealthCheckEndPoint).Uri.ToString(),
+      Timeout = TimeSpan.FromSeconds(5)
+    }
+  };
 }
 ```
 Once we have registered our services in the service discovery service, we can start implementing the Gateway API.
@@ -173,7 +335,7 @@ It is important to set the Consul as a service discovery service in **GlobalConf
       "Host": "consul",
       "Port": 8500,
       "Type": "PollConsul",
-      "PollingInterval": 100
+      "PollingInterval": 1000
     }
   }
 }
@@ -185,59 +347,55 @@ Here are some necessary explanations for **ServiceDiscoveryProvider** settings i
 * Type	
   * Consul, means that Ocelot will get service information from consul per request
   * PollConsul, means that Ocelot will poll Consul for latest service information
-* PollingInterval - tells Ocelot how often to call Consul for changes in the service registry
+* PollingInterval - tells Ocelot how often (in milliseconds) to call Consul for changes in the service registry
 
-After we have defined our configuration we can start to implement API Gateway. Below we can see the implementation of Ocelot API Gateway service, that uses our **ocelot.json** configuration file and **Consul** as a service registry.
+After we have defined our configuration we can start to implement API Gateway. Below we can see the implementation of Ocelot API Gateway service, that uses our **ocelot.json** configuration file and **Consul** as a service registry. The Consul and Polly integrations come from the **Ocelot.Discovery.Consul** and **Ocelot.QualityOfService.Polly** packages.
 
 ```csharp
-IHostBuilder hostBuilder = Host.CreateDefaultBuilder(args)
-  .UseContentRoot(Directory.GetCurrentDirectory())
-  .ConfigureWebHostDefaults(webBuilder =>
-  {
-    webBuilder.ConfigureServices(services =>
-      services
-        .AddOcelot()
-        .AddConsul<MyConsulServiceBuilder>()
-        .AddCacheManager(x =>
-        {
-          x.WithDictionaryHandle();
-        })
-        .AddPolly());
-    webBuilder.Configure(app =>
-      app.UseOcelot().Wait())
-    .ConfigureAppConfiguration((hostingContext, config) =>
-    {
-      config
-        .SetBasePath(hostingContext.HostingEnvironment.ContentRootPath)
-        .AddJsonFile("appsettings.json", false, true)
-        .AddJsonFile($"appsettings.{hostingContext.HostingEnvironment.EnvironmentName}.json", true, true)
-        .AddJsonFile("ocelot.json", false, true)
-        .AddEnvironmentVariables();
-    })
-    .ConfigureLogging((builderContext, logging) =>
-    {
-      logging.ClearProviders();
-      logging.AddConsole();
-      logging.AddDebug();
-    });
-  });
+using Ocelot.Cache.CacheManager;
+using Ocelot.DependencyInjection;
+using Ocelot.Discovery.Consul;
+using Ocelot.Middleware;
+using Ocelot.QualityOfService.Polly;
+using Services.Gateway.Services;
 
-IHost host = hostBuilder.Build();
-await host.RunAsync();
+WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+
+builder.Configuration.AddJsonFile("ocelot.json", optional: false, reloadOnChange: true);
+
+builder.Logging
+  .ClearProviders()
+  .AddConsole()
+  .AddDebug();
+
+builder.Services
+  .AddOcelot(builder.Configuration)
+  .AddConsul<MyConsulServiceBuilder>()
+  .AddCacheManager(x => x.WithDictionaryHandle())
+  .AddPolly();
+
+WebApplication app = builder.Build();
+
+await app.UseOcelot();
+await app.RunAsync();
 ```
 ## Running in Docker
 
 As mention before, we will containerize all services with Docker, including **Consul**, using **Lightweight GNU/Linux distributions** for containers.
 
-**docker-compose.yml** file with setup for all the containers looks like this:
+**docker-compose.yml** file with setup for all the containers looks like this. The **healthcheck** on the Consul container lets the other services wait until Consul is ready:
 ```yaml
-services:
 services:
    consul:
         image: hashicorp/consul
         container_name: consul
         command: consul agent -dev -log-level=warn -ui -client=0.0.0.0
         hostname: consul
+        healthcheck:
+            test: ["CMD", "consul", "members"]
+            interval: 2s
+            timeout: 3s
+            retries: 30
         networks:
             - common_network
 
@@ -288,7 +446,6 @@ services:
 networks:
     common_network:
         driver: bridge
-
 ```
 Note that our services doesn’t contain any confuguration files, for that purpose we are going to use **Docker-compose.override.yml** file:
 ```yaml
@@ -304,14 +461,15 @@ services:
           - ASPNETCORE_ENVIRONMENT=Development
           - ServiceConfig__ApiUrl=valueservice1.openapi
           - ServiceConfig__ConsulUrl=http://consul:8500
-          - ServiceConfig__HealthCheckEndPoint=healthcheck
+          - ServiceConfig__HealthCheckEndPoint=/health
           - ServiceConfig__Id=ValueService.OpenApi-9100
           - ServiceConfig__Name=ValueService
           - ServiceConfig__Port=8080
         ports:
             - 9100:8080
         depends_on:
-            - consul
+            consul:
+                condition: service_healthy
 
     valueservice2.openapi:
         # Swagger UI: http://localhost:9200/index.html
@@ -320,14 +478,15 @@ services:
           - ASPNETCORE_ENVIRONMENT=Development
           - ServiceConfig__ApiUrl=valueservice2.openapi
           - ServiceConfig__ConsulUrl=http://consul:8500
-          - ServiceConfig__HealthCheckEndPoint=healthcheck
+          - ServiceConfig__HealthCheckEndPoint=/health
           - ServiceConfig__Id=ValueService.OpenApi-9200
           - ServiceConfig__Name=ValueService
           - ServiceConfig__Port=8080
         ports:
             - 9200:8080
         depends_on:
-            - consul
+            consul:
+                condition: service_healthy
 
     valueservice3.openapi:
         # Swagger UI: http://localhost:9300/index.html
@@ -336,14 +495,15 @@ services:
           - ASPNETCORE_ENVIRONMENT=Development
           - ServiceConfig__ApiUrl=valueservice3.openapi
           - ServiceConfig__ConsulUrl=http://consul:8500
-          - ServiceConfig__HealthCheckEndPoint=healthcheck
+          - ServiceConfig__HealthCheckEndPoint=/health
           - ServiceConfig__Id=ValueService.OpenApi-9300
           - ServiceConfig__Name=ValueService
           - ServiceConfig__Port=8080
         ports:
             - 9300:8080
         depends_on:
-            - consul
+            consul:
+                condition: service_healthy
 
     services.gateway:
         # Call first available service: http://localhost:9500/api/values
@@ -352,10 +512,14 @@ services:
         ports:
             - 9500:8080
         depends_on:
-            - consul
-            - valueservice1.openapi
-            - valueservice2.openapi
-            - valueservice3.openapi
+            consul:
+                condition: service_healthy
+            valueservice1.openapi:
+                condition: service_started
+            valueservice2.openapi:
+                condition: service_started
+            valueservice3.openapi:
+                condition: service_started
 ```
 ## Setup the Containers
 

@@ -30,7 +30,7 @@
           "Consul", means that Ocelot will get service information from consul per request
           "PollConsul", means that Ocelot will poll Consul for latest service information
       */
-      "PollingInterval": 100
+      "PollingInterval": 1000
     }
   }
 }

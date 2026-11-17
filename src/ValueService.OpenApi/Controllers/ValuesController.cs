@@ -1,29 +1,11 @@
-﻿using System;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Primitives;
+﻿using Microsoft.AspNetCore.Mvc;
 
 namespace ValueService.OpenApi.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class ValuesController : ControllerBase
+public class ValuesController(ILogger<ValuesController> logger) : ControllerBase
 {
-  private readonly ILogger<ValuesController> _logger;
-  private readonly string _baseUrl;
-  private readonly HttpRequest _httpRequest;
-
-  public ValuesController(ILogger<ValuesController> logger, IHttpContextAccessor context)
-  {
-    if (context.HttpContext != null)
-    {
-      _httpRequest = context.HttpContext.Request;
-      _baseUrl = $"{_httpRequest.Scheme}://{_httpRequest.Host}";
-    }
-    _logger = logger;
-  }
-
   [HttpGet("badcode")]
   public string BadCode() => throw new ArgumentException("Some bad code was executed!");
 
@@ -31,23 +13,13 @@ public class ValuesController : ControllerBase
   [ProducesResponseType<string>(StatusCodes.Status200OK)]
   public IActionResult Get()
   {
-    IHeaderDictionary headers = _httpRequest.Headers;
-    StringValues ocelotReqId = headers["OcelotRequestId"];
-    if (string.IsNullOrEmpty(ocelotReqId))
-    {
-      ocelotReqId = "N/A";
-    }
-    string msg = $"Url: {_baseUrl}, Method: {_httpRequest.Method}, Path: {_httpRequest.Path}, OcelotRequestId: {ocelotReqId}";
-    _logger.LogInformation("{Message}", msg);
-    return Ok(msg);
-  }
+    string ocelotRequestId = Request.Headers["OcelotRequestId"].ToString() is { Length: > 0 } requestId
+      ? requestId
+      : "N/A";
 
-  [HttpGet("healthcheck")]
-  [ProducesResponseType<string>(StatusCodes.Status200OK)]
-  public IActionResult Healthcheck()
-  {
-    string msg = $"{_httpRequest.Host} is healthy";
-    _logger.LogInformation("{Message}", msg);
+    string msg =
+      $"Url: {Request.Scheme}://{Request.Host}, Method: {Request.Method}, Path: {Request.Path}, OcelotRequestId: {ocelotRequestId}";
+    logger.LogInformation("{Message}", msg);
     return Ok(msg);
   }
 
@@ -55,8 +27,8 @@ public class ValuesController : ControllerBase
   [ProducesResponseType<string>(StatusCodes.Status200OK)]
   public IActionResult Status()
   {
-    string msg = $"Running on {_httpRequest.Host}";
-    _logger.LogInformation("{Message}", msg);
+    string msg = $"Running on {Request.Host}";
+    logger.LogInformation("{Message}", msg);
     return Ok(msg);
   }
 }
