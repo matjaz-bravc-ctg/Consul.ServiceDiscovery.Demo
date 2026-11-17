@@ -1,8 +1,7 @@
 ﻿using Consul;
 using Microsoft.AspNetCore.Http;
 using Ocelot.Logging;
-using Ocelot.Provider.Consul;
-using Ocelot.Provider.Consul.Interfaces;
+using Ocelot.Discovery.Consul;
 
 namespace Services.Gateway.Services;
 

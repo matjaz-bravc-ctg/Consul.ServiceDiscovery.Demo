@@ -391,12 +391,12 @@ Micro service systems are not easy to build and maintain. But this tutorial show
 Enjoy!
 
 ## Prerequisites
-- [Visual Studio](https://www.visualstudio.com/vs/community) 2022 17.2.6 or greater
-- [.NET SDK 8.0](https://dotnet.microsoft.com/download/dotnet/8.0)
+- [Visual Studio](https://www.visualstudio.com/vs/community) 2026 or greater
+- [.NET SDK 10.0](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [Docker](https://www.docker.com/resources/what-container)
 
 ## Tags & Technologies
-- [.NET 8](https://github.com/dotnet/core/blob/main/release-notes/8.0)
+- [.NET 10](https://github.com/dotnet/core/blob/main/release-notes/10.0)
 - [Consul](https://www.consul.io/)
 - [Docker](https://www.docker.com/resources/what-container)  
 - [Ocelot](https://github.com/ThreeMammals/Ocelot)  

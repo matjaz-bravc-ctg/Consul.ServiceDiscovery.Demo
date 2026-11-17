@@ -5,8 +5,8 @@ using Microsoft.Extensions.Logging;
 using Ocelot.Cache.CacheManager;
 using Ocelot.DependencyInjection;
 using Ocelot.Middleware;
-using Ocelot.Provider.Consul;
-using Ocelot.Provider.Polly;
+using Ocelot.Discovery.Consul;
+using Ocelot.QualityOfService.Polly;
 using Services.Gateway.Services;
 using System.IO;
 
