@@ -1,0 +1,59 @@
+src/Services.Core/ServiceDiscovery/ServiceDiscoveryExtensions.cs
+  s_d6b825e398babf::t_4aad4b8c527dbd 3,7-9,12-16,18,20-24,26-34,36
+src/ValueService.OpenApi/Dockerfile
+  s_d6b825e398babf::t_fb35b1552144df 15
+Directory.Packages.props
+  s_d6b825e398babf::t_9f280a607a7224 1-18
+README.md
+  s_d6b825e398babf::t_739b5ae50bdaf8 60,63-127,129-133,135,137-143,145-151,155-157,160-173,176-177,179-185,188,190,192-195,197-199,201-205,207-213,215-233,240,242-248,255,258-300,338,350,352,355-364,366-380,386,394-398,464,471-472,481,488-489,498,505-506,515-522
+Consul.ServiceDiscovery.Demo.sln
+  s_d6b825e398babf::t_0a8c9be5ec097b 18-19
+src/ValueService.OpenApi/Controllers/ValuesController.cs
+  s_d6b825e398babf::t_2d2f630bc0765a 1,7,16-18,20-22,30-31
+docker-compose.override.yml
+  s_d6b825e398babf::t_fb35b1552144df 13,20-21,30,37-38,47,54-55,64-71
+src/ValueService.OpenApi/Program.cs
+  s_d6b825e398babf::t_464bde7e7d613c 2
+  s_d6b825e398babf::t_4736ca28a0f5d4 54-55,57
+  s_d6b825e398babf::t_9a1b9f2c015ed8 1,3-20,22-47,49-50,52-53,56,58,60
+src/Services.Gateway/Services.Gateway.csproj
+  s_d6b825e398babf::t_fc094960cf14a9 8-17
+src/Services.Core/Services.Core.csproj
+  s_d6b825e398babf::t_10528b9b68fef3 3-7
+Directory.Build.props
+  s_d6b825e398babf::t_767e5f9ac06ab1 1-7
+src/Services.Gateway/Program.cs
+  s_d6b825e398babf::t_799a6970f67a02 4,8-23,25-26
+src/Services.Gateway/ocelot.json
+  s_d6b825e398babf::t_236ea813dd0902 33
+src/Services.Core/ServiceDiscovery/ServiceConfig.cs
+  s_d6b825e398babf::t_aaa804a7b7ff6e 1,5-9,11-14,16-20,22-26,28-32,34-38,40-50
+docker-compose.yml
+  s_d6b825e398babf::t_fb35b1552144df 7-11
+src/Services.Gateway/Dockerfile
+  s_d6b825e398babf::t_fb35b1552144df 14
+src/ValueService.OpenApi/ValueService.OpenApi.csproj
+  s_d6b825e398babf::t_0ba3e95d998538 7-9,11-14
+src/Services.Core/ServiceDiscovery/ServiceDiscoveryHostedService.cs
+  s_d6b825e398babf::t_c52e28a0b00e84 4,9-12,14,17,20-22,24,29,33-34,38,42,44-46,54-55,58,62-64,69,99-141
+src/ValueService.OpenApi/appsettings.Development.json
+  s_d6b825e398babf::t_60b086c6d21570 8-15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "0.8.13",
+  "client_id": "ctg-provenance",
+  "client_version": "0.8.13",
+  "base_commit_sha": "420fd457853e3c15c5849cd1436ae109f4c1ffe0",
+  "prompts": {},
+  "sessions": {
+    "s_d6b825e398babf": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6377678f-d3af-4761-aecb-a6b06c202132",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Matjaž Bravc <matjaz.bravc@comtradegaming.com>"
+    }
+  }
+}
